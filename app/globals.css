@@ -164,6 +164,7 @@ button, select { font: inherit; color: inherit; }
 .tags .plat { background: transparent; border: 1px solid var(--line); }
 .tags .apply, .tags .urgent { background: var(--warn-soft); color: var(--warn); }
 .tags .lang { background: var(--accent-soft); color: var(--accent); }
+.tags .prov { background: transparent; color: var(--ink); font-weight: 600; padding-left: 0; }
 
 /* Mercado */
 .market { display: grid; gap: 28px; margin-top: 8px; }

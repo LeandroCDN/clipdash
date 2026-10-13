@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import FilterBar from "./FilterBar";
 import { groupSum, lastRun, loadCampaigns, median, score, type Filters, type Group, type Scored } from "@/lib/data";
-import { LANGS, PLATFORM_LABELS } from "@/lib/labels";
+import { LANGS, PLATFORM_LABELS, PROVIDER_LABELS } from "@/lib/labels";
 
 export const dynamic = "force-dynamic";
 
@@ -134,7 +134,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Raw
             groups={groupSum(rows, (r) => Object.keys(r.rates).filter((p) => f.platforms.length === 0 || f.platforms.includes(p)))}
             label={(k) => PLATFORM_LABELS[k] ?? k}
           />
-          {providers.length > 1 && <BarList title="Por proveedor" groups={groupSum(rows, (r) => [r.provider])} />}
+          {providers.length > 1 && <BarList title="Por proveedor" groups={groupSum(rows, (r) => [r.provider])} label={(k) => PROVIDER_LABELS[k] ?? k} />}
           <p className="hint">Una campaña con varias temáticas o redes suma en cada una.</p>
         </section>
       )}
@@ -184,7 +184,12 @@ function Card({ r }: { r: Scored }) {
       </p>
 
       <ul className="tags">
-        <li>{(r.creators ?? 0).toLocaleString("en-US")} {r.creators === 1 ? "clipper" : "clippers"}</li>
+        <li className="prov">{PROVIDER_LABELS[r.provider] ?? r.provider}</li>
+        <li>
+          {r.creators == null
+            ? "Clippers sin dato"
+            : `${r.creators.toLocaleString("en-US")} ${r.creators === 1 ? "clipper" : "clippers"}`}
+        </li>
         <li>Hace {span(r.ageHours)}</li>
         {burn != null && burn > 0 && (
           <li className={r.hoursLeft != null && r.hoursLeft < 48 ? "urgent" : ""}>

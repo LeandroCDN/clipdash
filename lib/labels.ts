@@ -6,3 +6,8 @@ export const LANGS: Record<string, string> = {
 export const PLATFORM_LABELS: Record<string, string> = {
   tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube", x: "X", facebook: "Facebook",
 };
+
+export const PROVIDER_LABELS: Record<string, string> = {
+  contentrewards: "Content Rewards",
+  vyro: "Vyro",
+};

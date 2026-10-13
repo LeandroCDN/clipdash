@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
-import { LANGS } from "@/lib/labels";
+import { LANGS, PROVIDER_LABELS } from "@/lib/labels";
 
 const PLATFORMS: [string, string][] = [
   ["tiktok", "TikTok"],
@@ -87,7 +87,7 @@ export default function FilterBar({ categories, providers }: { categories: strin
             <span className="sr">Proveedor</span>
             <select value={prov} onChange={(e) => setOne("prov", e.target.value)}>
               <option value="">Todos los proveedores</option>
-              {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+              {providers.map((p) => <option key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</option>)}
             </select>
           </label>
         )}

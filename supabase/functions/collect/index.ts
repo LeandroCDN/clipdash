@@ -4,6 +4,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { contentRewards } from "./providers/contentrewards.ts";
 import type { Adapter } from "./types.ts";
 
+// Vyro (providers/vyro.ts) está escrito pero desactivado: su catálogo exige login (HTTP 401).
 const ADAPTERS: Adapter[] = [contentRewards];
 
 const supabase = createClient(
