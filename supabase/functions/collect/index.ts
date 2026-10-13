@@ -18,17 +18,8 @@ async function runAdapter(adapter: Adapter) {
   try {
     const items = await adapter.fetchAll();
 
-    // first_seen_at: no pisar el existente
-    const ids = items.map((i) => i.campaign.id);
-    const { data: known } = await supabase
-      .from("campaigns").select("id").eq("provider", adapter.name).in("id", ids);
-    const knownIds = new Set((known ?? []).map((k) => k.id));
-
-    const campaigns = items.map((i) => ({
-      ...i.campaign,
-      last_seen_at: takenAt,
-      ...(knownIds.has(i.campaign.id) ? {} : { first_seen_at: takenAt }),
-    }));
+    // first_seen_at no va en el payload: lo pone el default al insertar y el upsert no lo pisa.
+    const campaigns = items.map((i) => ({ ...i.campaign, last_seen_at: takenAt }));
     for (const chunk of chunks(campaigns, 200)) {
       const { error } = await supabase.from("campaigns").upsert(chunk, { onConflict: "provider,id" });
       if (error) throw error;
@@ -61,7 +52,16 @@ function chunks<T>(arr: T[], n: number): T[][] {
   return out;
 }
 
-Deno.serve(async () => {
+// Solo pg_cron conoce el secreto: vive en public.app_secrets (RLS sin políticas, solo service role).
+async function authorized(req: Request) {
+  const given = req.headers.get("x-cron-secret");
+  if (!given) return false;
+  const { data } = await supabase.from("app_secrets").select("value").eq("name", "cron").single();
+  return !!data && data.value === given;
+}
+
+Deno.serve(async (req) => {
+  if (!(await authorized(req))) return new Response("unauthorized", { status: 401 });
   const results = [];
   for (const a of ADAPTERS) results.push(await runAdapter(a)); // uno caído no frena al resto
   return Response.json({ ok: true, results });
