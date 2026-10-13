@@ -1,4 +1,6 @@
--- Retención: snapshots de 15 min solo 7 días; después queda un resumen diario por campaña.
+-- Retención: los snapshots de 15 min se resumen por día en campaign_daily.
+-- El borrado de snapshots de más de 7 días lo hace la Edge Function `collect`
+-- en la corrida de las 03:00 UTC (ver retention() en index.ts).
 
 create table if not exists campaign_daily (
     provider             text not null,
@@ -19,8 +21,8 @@ create policy "public read" on campaign_daily for select using (true);
 
 create index if not exists idx_snap_taken_at on campaign_snapshots (taken_at);
 
--- Resume cada día con su último snapshot y borra lo que tenga más de 7 días.
-create or replace function rollup_and_prune(keep_days integer default 7)
+-- Resume cada día con su último snapshot (idempotente).
+create or replace function rollup_daily()
 returns void
 language sql
 security definer
@@ -41,12 +43,7 @@ as $$
         approved_submissions = excluded.approved_submissions,
         total_views          = excluded.total_views,
         snapshots            = greatest(d.snapshots, excluded.snapshots);
-
-    delete from campaign_snapshots
-    where taken_at < now() - make_interval(days => keep_days);
 $$;
 
-revoke execute on function rollup_and_prune(integer) from public, anon, authenticated;
-
--- Todos los días a las 03:10 UTC.
-select cron.schedule('rollup-and-prune-daily', '10 3 * * *', $$ select public.rollup_and_prune(); $$);
+revoke execute on function rollup_daily() from public, anon, authenticated;
+grant execute on function rollup_daily() to service_role;

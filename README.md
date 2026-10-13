@@ -33,4 +33,5 @@ npm run dev
 ## Notas
 
 - El idioma se infiere con palabras clave del título y la descripción (`language.ts`); pendiente reemplazarlo por un LLM.
-- Ritmo de requests bajo a propósito (1,5 s entre páginas).
+- Ritmo de requests bajo a propósito (1,5 s entre páginas); errores 429/5xx se reintentan hasta 3 veces.
+- Retención: snapshots de 15 min se guardan 7 días. Antes de borrarlos, `rollup_daily()` los resume en `campaign_daily` (corre en la ejecución de las 03:00 UTC).

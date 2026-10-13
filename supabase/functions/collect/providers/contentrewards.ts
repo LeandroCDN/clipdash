@@ -59,6 +59,29 @@ function normalize(c: any): Normalized {
   };
 }
 
+// Errores temporales (429 / 5xx / red) se reintentan con espera creciente: 3 s, 9 s, 27 s.
+async function getPage(url: string, attempts = 4) {
+  let last = "";
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await sleep(3000 * 3 ** (i - 1));
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (clipdash personal research)",
+          Referer: "https://contentrewards.com/c/discover",
+        },
+      });
+      if (res.ok) return await res.json();
+      last = `HTTP ${res.status}`;
+      if (res.status !== 429 && res.status < 500) break; // 4xx: no tiene sentido reintentar
+    } catch (e) {
+      last = e instanceof Error ? e.message : String(e);
+    }
+  }
+  throw new Error(`contentrewards ${last}`);
+}
+
 export const contentRewards: Adapter = {
   name: NAME,
   async fetchAll() {
@@ -67,15 +90,7 @@ export const contentRewards: Adapter = {
     for (let page = 0; page < MAX_PAGES; page++) {
       const params = new URLSearchParams({ collapseGroups: "true", limit: String(PAGE), view: "summary" });
       if (cursor) params.set("cursor", cursor);
-      const res = await fetch(`${BASE}?${params}`, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (clipdash personal research)",
-          Referer: "https://contentrewards.com/c/discover",
-        },
-      });
-      if (!res.ok) throw new Error(`contentrewards HTTP ${res.status}`);
-      const body = await res.json();
+      const body = await getPage(`${BASE}?${params}`);
       for (const c of body.data ?? []) {
         if (c && c.id && c.budgetCents != null && !seen.has(c.id)) seen.set(c.id, normalize(c));
       }

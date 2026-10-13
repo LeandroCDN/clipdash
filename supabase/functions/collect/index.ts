@@ -60,9 +60,24 @@ async function authorized(req: Request) {
   return !!data && data.value === given;
 }
 
+// Retención: snapshots de 15 min solo 7 días; antes de borrar, se resumen en campaign_daily.
+const KEEP_DAYS = 7;
+
+async function retention() {
+  const { error: rollupError } = await supabase.rpc("rollup_daily");
+  if (rollupError) return { retention: `rollup falló: ${rollupError.message}` };
+  const cutoff = new Date(Date.now() - KEEP_DAYS * 864e5).toISOString();
+  const { error, count } = await supabase
+    .from("campaign_snapshots").delete({ count: "exact" }).lt("taken_at", cutoff);
+  return { retention: error ? `borrado falló: ${error.message}` : `${count ?? 0} snapshots borrados` };
+}
+
 Deno.serve(async (req) => {
   if (!(await authorized(req))) return new Response("unauthorized", { status: 401 });
-  const results = [];
+  const results: unknown[] = [];
   for (const a of ADAPTERS) results.push(await runAdapter(a)); // uno caído no frena al resto
+  // Una vez por día, en la corrida de las 03:00 UTC.
+  const now = new Date();
+  if (now.getUTCHours() === 3 && now.getUTCMinutes() < 15) results.push(await retention());
   return Response.json({ ok: true, results });
 });
