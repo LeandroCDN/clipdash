@@ -1,209 +1,221 @@
-import { groupSum, lastRun, loadCampaigns, score, type Filters, type Scored } from "@/lib/data";
+import { Suspense } from "react";
+import Link from "next/link";
+import FilterBar from "./FilterBar";
+import { groupSum, lastRun, loadCampaigns, median, score, type Filters, type Group, type Scored } from "@/lib/data";
+import { LANGS, PLATFORM_LABELS } from "@/lib/labels";
 
 export const dynamic = "force-dynamic";
 
-const PLATFORMS = ["tiktok", "instagram", "youtube", "x", "facebook"];
-const LANGS: Record<string, string> = {
-  en: "Inglés", es: "Español", fr: "Francés", de: "Alemán", pt: "Portugués", it: "Italiano", ar: "Árabe", tr: "Turco",
-};
+type Raw = Record<string, string | string[] | undefined>;
+type View = "top" | "new" | "market";
 
-type SP = Promise<Record<string, string | string[] | undefined>>;
-
-function parse(sp: Record<string, string | string[] | undefined>): Filters {
+function parse(sp: Raw): Filters & { view: View } {
   const arr = (v: string | string[] | undefined) => (Array.isArray(v) ? v : v ? [v] : []);
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
+  const view = one(sp.view);
   return {
     platforms: arr(sp.p),
     language: one(sp.lang),
     category: one(sp.cat),
     provider: one(sp.prov),
     noApply: one(sp.noapply) === "1",
+    view: view === "new" || view === "market" ? view : "top",
   };
 }
 
-const usd = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
-const ago = (h: number) => (h < 24 ? `${Math.round(h)} h` : `${Math.round(h / 24)} d`);
+function hrefWith(sp: Raw, view: View) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (k === "view" || v == null) continue;
+    (Array.isArray(v) ? v : [v]).forEach((x) => q.append(k, x));
+  }
+  if (view !== "top") q.set("view", view);
+  const s = q.toString();
+  return s ? `/?${s}` : "/";
+}
 
-export default async function Page({ searchParams }: { searchParams: SP }) {
-  const f = parse(await searchParams);
+const money = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
+function compact(n: number) {
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(2).replace(/\.?0+$/, "") + "M";
+  if (n >= 1e4) return "$" + Math.round(n / 1e3) + "k";
+  return money(n);
+}
+function span(h: number) {
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} min`;
+  if (h < 48) return `${Math.round(h)} h`;
+  return `${Math.round(h / 24)} d`;
+}
+
+export default async function Page({ searchParams }: { searchParams: Promise<Raw> }) {
+  const raw = await searchParams;
+  const f = parse(raw);
+
   let all, runs;
   try {
     [all, runs] = await Promise.all([loadCampaigns(), lastRun()]);
   } catch (e) {
     return (
-      <main className="wrap">
-        <h1>clipdash</h1>
-        <p className="err">No pude leer la base: {e instanceof Error ? e.message : String(e)}</p>
+      <main className="page">
+        <h1 className="brand">clipdash</h1>
+        <p className="notice">
+          No se pudo leer la base de datos: {e instanceof Error ? e.message : String(e)}. Revisá las variables
+          de entorno de Supabase en Vercel.
+        </p>
       </main>
     );
   }
 
-  const rows = score(all, f);
-  const fresh = rows.filter((r) => r.ageHours <= 48).slice(0, 8);
-  const byCat = groupSum(rows, (r) => (r.categories.length ? r.categories : ["Sin categoría"])).slice(0, 12);
-  const byLang = groupSum(rows, (r) => [r.language ?? "?"]);
-  const byPlat = groupSum(rows, (r) =>
-    Object.keys(r.rates).filter((p) => f.platforms.length === 0 || f.platforms.includes(p)));
-  const categories = [...new Set(all.flatMap((c) => c.categories))].sort();
+  const { rows, hiddenOutliers } = score(all, f);
+  const fresh = rows.filter((r) => r.ageHours <= 48).sort((a, b) => a.ageHours - b.ageHours);
+  const total = rows.reduce((s, r) => s + Number(r.remaining_usd), 0);
+  const med = median(rows.map((r) => r.rate));
+  const categories = [...new Set(all.flatMap((c) => c.categories))].sort((a, b) => a.localeCompare(b));
   const providers = [...new Set(all.map((c) => c.provider))].sort();
-  const totalRemaining = rows.reduce((s, r) => s + Number(r.remaining_usd), 0);
-  const avgRate = rows.length ? rows.reduce((s, r) => s + r.rate, 0) / rows.length : 0;
-  const maxCat = byCat[0]?.remaining || 1;
   const run = runs[0];
+  const updated = run?.finished_at ? (Date.now() - new Date(run.finished_at).getTime()) / 36e5 : null;
 
   return (
-    <main className="wrap">
-      <header className="top">
-        <div>
-          <h1>clipdash</h1>
-          <p className="muted">Radar de campañas de clipping</p>
-        </div>
-        <p className="muted small">
-          {run ? <>Última corrida: {new Date(run.finished_at ?? "").toLocaleString("es-AR")} · {run.campaigns ?? 0} campañas{run.error ? ` · error: ${run.error}` : ""}</> : "Sin corridas todavía"}
+    <main className="page">
+      <header className="masthead">
+        <h1 className="brand">clipdash</h1>
+        <p className="updated">
+          {run?.error
+            ? <span className="warn">Falló la última actualización</span>
+            : updated != null ? `Actualizado hace ${span(updated)}` : "Sin datos todavía"}
         </p>
       </header>
 
-      <form className="filters" method="get">
-        <fieldset>
-          <legend>Redes</legend>
-          {PLATFORMS.map((p) => (
-            <label key={p} className="chip">
-              <input type="checkbox" name="p" value={p} defaultChecked={f.platforms.includes(p)} /> {p}
-            </label>
-          ))}
-        </fieldset>
-        <label>Idioma
-          <select name="lang" defaultValue={f.language}>
-            <option value="">Todos</option>
-            {Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-        </label>
-        <label>Temática
-          <select name="cat" defaultValue={f.category}>
-            <option value="">Todas</option>
-            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </label>
-        <label>Proveedor
-          <select name="prov" defaultValue={f.provider}>
-            <option value="">Todos</option>
-            {providers.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </label>
-        <label className="chip">
-          <input type="checkbox" name="noapply" value="1" defaultChecked={f.noApply} /> Sin aplicación
-        </label>
-        <button type="submit">Aplicar</button>
-      </form>
-
-      <section className="kpis">
-        <Kpi label="Campañas" value={rows.length.toLocaleString("en-US")} />
-        <Kpi label="Presupuesto restante" value={usd(totalRemaining)} />
-        <Kpi label="Tasa promedio / 1k" value={"$" + avgRate.toFixed(2)} />
-        <Kpi label="Nuevas (48 h)" value={String(rows.filter((r) => r.ageHours <= 48).length)} />
+      <section className="hero" aria-label="Resumen">
+        <p className="hero-amount">{compact(total)}</p>
+        <p className="hero-caption">
+          por repartir en {rows.length.toLocaleString("en-US")} campañas
+        </p>
+        <dl className="facts">
+          <div><dt>Tasa mediana</dt><dd>${med.toFixed(2)} <small>por 1.000 vistas</small></dd></div>
+          <div><dt>Nuevas en 48 h</dt><dd>{fresh.length}</dd></div>
+        </dl>
       </section>
 
-      {fresh.length > 0 && (
-        <section>
-          <h2>Nuevas en las últimas 48 h</h2>
-          <CampaignTable rows={fresh} />
+      <Suspense fallback={<div className="filters" />}>
+        <FilterBar categories={categories} providers={providers} />
+      </Suspense>
+
+      <nav className="tabs" aria-label="Vistas">
+        <Link href={hrefWith(raw, "top")} aria-current={f.view === "top" ? "page" : undefined} scroll={false}>Mejores</Link>
+        <Link href={hrefWith(raw, "new")} aria-current={f.view === "new" ? "page" : undefined} scroll={false}>
+          Nuevas <span className="count">{fresh.length}</span>
+        </Link>
+        <Link href={hrefWith(raw, "market")} aria-current={f.view === "market" ? "page" : undefined} scroll={false}>Mercado</Link>
+      </nav>
+
+      {f.view === "top" && (
+        <section aria-label="Mejores campañas">
+          <p className="hint">
+            Ordenadas por tasa × presupuesto que queda ÷ clippers compitiendo.
+            {hiddenOutliers > 0 && ` Ocultamos ${hiddenOutliers} con tasas de más de $50 por 1.000 vistas, casi seguro errores de carga.`}
+          </p>
+          <CardList rows={rows.slice(0, 60)} empty="Ninguna campaña cumple estos filtros." />
         </section>
       )}
 
-      <section className="grid2">
-        <div>
-          <h2>Dónde está la plata · por temática</h2>
-          <table className="t">
-            <thead><tr><th>Temática</th><th className="n">Restante</th><th className="n">Camp.</th><th className="n">$/1k</th></tr></thead>
-            <tbody>
-              {byCat.map((g) => (
-                <tr key={g.key}>
-                  <td>
-                    <div className="barcell">
-                      <span className="bar" style={{ width: `${(g.remaining / maxCat) * 100}%` }} />
-                      <span>{g.key}</span>
-                    </div>
-                  </td>
-                  <td className="n">{usd(g.remaining)}</td>
-                  <td className="n">{g.count}</td>
-                  <td className="n">{g.avgRate.toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <h2>Por idioma</h2>
-          <table className="t">
-            <thead><tr><th>Idioma</th><th className="n">Restante</th><th className="n">Camp.</th><th className="n">$/1k</th></tr></thead>
-            <tbody>
-              {byLang.map((g) => (
-                <tr key={g.key}><td>{LANGS[g.key] ?? g.key}</td><td className="n">{usd(g.remaining)}</td><td className="n">{g.count}</td><td className="n">{g.avgRate.toFixed(2)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-          <h2>Por red</h2>
-          <table className="t">
-            <thead><tr><th>Red</th><th className="n">Restante</th><th className="n">Camp.</th><th className="n">$/1k</th></tr></thead>
-            <tbody>
-              {byPlat.map((g) => (
-                <tr key={g.key}><td>{g.key}</td><td className="n">{usd(g.remaining)}</td><td className="n">{g.count}</td><td className="n">{g.avgRate.toFixed(2)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {f.view === "new" && (
+        <section aria-label="Campañas nuevas">
+          <p className="hint">Las primeras 48 h son las que más pagan: hay presupuesto entero y poca competencia.</p>
+          <CardList rows={fresh} empty="No apareció ninguna campaña nueva en las últimas 48 h con estos filtros." />
+        </section>
+      )}
 
-      <section>
-        <h2>Ranking · tasa × restante ÷ competencia</h2>
-        <CampaignTable rows={rows.slice(0, 100)} />
-      </section>
+      {f.view === "market" && (
+        <section aria-label="Mercado" className="market">
+          <BarList title="Por temática" groups={groupSum(rows, (r) => (r.categories.length ? r.categories : ["Sin temática"])).slice(0, 15)} />
+          <BarList title="Por idioma" groups={groupSum(rows, (r) => [r.language ?? "?"])} label={(k) => LANGS[k] ?? k} />
+          <BarList
+            title="Por red"
+            groups={groupSum(rows, (r) => Object.keys(r.rates).filter((p) => f.platforms.length === 0 || f.platforms.includes(p)))}
+            label={(k) => PLATFORM_LABELS[k] ?? k}
+          />
+          {providers.length > 1 && <BarList title="Por proveedor" groups={groupSum(rows, (r) => [r.provider])} />}
+          <p className="hint">Una campaña con varias temáticas o redes suma en cada una.</p>
+        </section>
+      )}
     </main>
   );
 }
 
-function Kpi({ label, value }: { label: string; value: string }) {
+function CardList({ rows, empty }: { rows: Scored[]; empty: string }) {
+  if (rows.length === 0) return <p className="empty">{empty}</p>;
   return (
-    <div className="kpi">
-      <div className="muted small">{label}</div>
-      <div className="kv">{value}</div>
-    </div>
+    <ol className="cards">
+      {rows.map((r) => <Card key={r.provider + r.id} r={r} />)}
+    </ol>
   );
 }
 
-function CampaignTable({ rows }: { rows: Scored[] }) {
+function Card({ r }: { r: Scored }) {
+  const budget = Number(r.budget_usd ?? 0);
+  const remaining = Number(r.remaining_usd);
+  const spentPct = budget > 0 ? Math.min(100, Math.max(0, ((budget - remaining) / budget) * 100)) : 0;
+  const burn = r.burn_usd_per_hour != null ? Number(r.burn_usd_per_hour) : null;
+  const platforms = Object.keys(r.rates);
+
   return (
-    <div className="scroll">
-      <table className="t">
-        <thead>
-          <tr>
-            <th>Campaña</th><th>Temática</th><th>Redes</th>
-            <th className="n">$/1k</th><th className="n">Restante</th><th className="n">Clippers</th>
-            <th className="n">Burn/h</th><th className="n">Quedan</th><th className="n">Edad</th><th className="n">Puntaje</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.provider + r.id}>
-              <td>
-                <a href={r.url ?? "#"} target="_blank" rel="noreferrer">{r.name}</a>
-                <div className="muted small">
-                  {r.organizer}{r.organizer_verified ? " ✓" : ""} · {r.provider}{r.requires_application ? " · aplicar" : ""}{r.language && r.language !== "en" ? ` · ${r.language}` : ""}
-                </div>
-              </td>
-              <td className="small">{r.categories.slice(0, 2).join(", ") || "—"}</td>
-              <td className="small">{Object.keys(r.rates).join(" ")}</td>
-              <td className="n">{r.rate.toFixed(2)}</td>
-              <td className="n">{usd(Number(r.remaining_usd))}</td>
-              <td className="n">{r.creators ?? 0}</td>
-              <td className="n">{r.burn_usd_per_hour != null ? usd(Number(r.burn_usd_per_hour)) : "—"}</td>
-              <td className="n">{r.hoursLeft != null ? ago(r.hoursLeft) : "—"}</td>
-              <td className="n">{ago(r.ageHours)}</td>
-              <td className="n strong">{Math.round(r.score).toLocaleString("en-US")}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <li className="card">
+      <div className="card-head">
+        <div className="card-title">
+          <a href={r.url ?? "#"} target="_blank" rel="noreferrer">{r.name}</a>
+          <p className="org">
+            {r.organizer}
+            {r.organizer_verified && <span className="verified" title="Organizador verificado"> ✓</span>}
+            {r.categories.length > 0 && <span className="cat">{r.categories.slice(0, 2).join(", ")}</span>}
+          </p>
+        </div>
+        <p className="rate">
+          <strong>${r.rate.toFixed(2)}</strong>
+          <span>por 1k</span>
+        </p>
+      </div>
+
+      <div className="meter" role="img" aria-label={`Gastado ${Math.round(spentPct)}% del presupuesto`}>
+        <span style={{ width: `${spentPct}%` }} />
+      </div>
+      <p className="budget">
+        <span><strong>{money(remaining)}</strong> quedan de {compact(budget)}</span>
+        <span>{Math.round(spentPct)}% gastado</span>
+      </p>
+
+      <ul className="tags">
+        <li>{(r.creators ?? 0).toLocaleString("en-US")} {r.creators === 1 ? "clipper" : "clippers"}</li>
+        <li>Hace {span(r.ageHours)}</li>
+        {burn != null && burn > 0 && (
+          <li className={r.hoursLeft != null && r.hoursLeft < 48 ? "urgent" : ""}>
+            {money(burn)}/h{r.hoursLeft != null && `, se agota en ${span(r.hoursLeft)}`}
+          </li>
+        )}
+        {platforms.map((p) => <li key={p} className="plat">{PLATFORM_LABELS[p] ?? p}</li>)}
+        {r.requires_application && <li className="apply">Requiere aplicar</li>}
+        {r.language && r.language !== "en" && <li className="lang">{LANGS[r.language] ?? r.language}</li>}
+      </ul>
+    </li>
+  );
+}
+
+function BarList({ title, groups, label = (k) => k }: { title: string; groups: Group[]; label?: (k: string) => string }) {
+  const max = groups[0]?.remaining || 1;
+  return (
+    <div className="barlist">
+      <h2>{title}</h2>
+      <ul>
+        {groups.map((g) => (
+          <li key={g.key}>
+            <div className="bl-row">
+              <span className="bl-label">{label(g.key)}</span>
+              <span className="bl-value">{compact(g.remaining)}</span>
+            </div>
+            <div className="bl-bar"><span style={{ width: `${(g.remaining / max) * 100}%` }} /></div>
+            <p className="bl-meta">{g.count} {g.count === 1 ? "campaña" : "campañas"}, mediana ${g.medianRate.toFixed(2)} por 1k</p>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

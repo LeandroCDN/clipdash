@@ -47,6 +47,11 @@ function client() {
 }
 
 export async function loadCampaigns(): Promise<Campaign[]> {
+  // Solo desarrollo: CLIPDASH_MOCK=ruta.json para ver la UI sin Supabase.
+  if (process.env.CLIPDASH_MOCK) {
+    const { readFile } = await import("node:fs/promises");
+    return JSON.parse(await readFile(process.env.CLIPDASH_MOCK, "utf8"));
+  }
   const sb = client();
   const out: Campaign[] = [];
   for (let from = 0; ; from += 1000) {
@@ -63,6 +68,7 @@ export async function loadCampaigns(): Promise<Campaign[]> {
 }
 
 export async function lastRun() {
+  if (process.env.CLIPDASH_MOCK) return [{ provider: "mock", finished_at: new Date(Date.now() - 6e5).toISOString(), campaigns: 0, error: null }];
   const { data } = await client()
     .from("collector_runs")
     .select("provider, finished_at, campaigns, error")
@@ -71,10 +77,21 @@ export async function lastRun() {
   return data ?? [];
 }
 
+/** Tasas por encima de esto son casi siempre errores de carga del proveedor. */
+export const MAX_SANE_RATE = 50;
+
+export function median(xs: number[]) {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
 /** Puntaje = mejor tasa en las redes elegidas × presupuesto restante ÷ (clippers + 5). */
-export function score(rows: Campaign[], f: Filters): Scored[] {
+export function score(rows: Campaign[], f: Filters): { rows: Scored[]; hiddenOutliers: number } {
   const now = Date.now();
   const out: Scored[] = [];
+  let hiddenOutliers = 0;
   for (const c of rows) {
     if (c.payout_type !== "cpm") continue;
     if (f.language && c.language !== f.language) continue;
@@ -86,7 +103,9 @@ export function score(rows: Campaign[], f: Filters): Scored[] {
       .map(([, v]) => Number(v));
     if (rates.length === 0) continue;
     const rate = Math.max(...rates);
+    if (rate > MAX_SANE_RATE) { hiddenOutliers++; continue; }
     const remaining = Number(c.remaining_usd);
+    if (remaining <= 0) continue;
     const burn = c.burn_usd_per_hour != null ? Number(c.burn_usd_per_hour) : null;
     out.push({
       ...c,
@@ -96,21 +115,22 @@ export function score(rows: Campaign[], f: Filters): Scored[] {
       ageHours: (now - new Date(c.launched_at ?? c.first_seen_at).getTime()) / 36e5,
     });
   }
-  return out.sort((a, b) => b.score - a.score);
+  return { rows: out.sort((a, b) => b.score - a.score), hiddenOutliers };
 }
 
-export function groupSum(rows: Scored[], key: (c: Scored) => string[]) {
-  const m = new Map<string, { remaining: number; count: number; rateSum: number }>();
+export type Group = { key: string; remaining: number; count: number; medianRate: number };
+
+export function groupSum(rows: Scored[], key: (c: Scored) => string[]): Group[] {
+  const m = new Map<string, { remaining: number; rates: number[] }>();
   for (const r of rows) {
     for (const k of key(r)) {
-      const g = m.get(k) ?? { remaining: 0, count: 0, rateSum: 0 };
+      const g = m.get(k) ?? { remaining: 0, rates: [] };
       g.remaining += Number(r.remaining_usd);
-      g.count += 1;
-      g.rateSum += r.rate;
+      g.rates.push(r.rate);
       m.set(k, g);
     }
   }
   return [...m.entries()]
-    .map(([k, g]) => ({ key: k, remaining: g.remaining, count: g.count, avgRate: g.rateSum / g.count }))
+    .map(([k, g]) => ({ key: k, remaining: g.remaining, count: g.rates.length, medianRate: median(g.rates) }))
     .sort((a, b) => b.remaining - a.remaining);
 }
